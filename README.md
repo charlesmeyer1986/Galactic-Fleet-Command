@@ -1,208 +1,150 @@
 # Galactic Fleet Command
 
-## Context
+## Overview
 
-You are building the backend for **Galactic Fleet Command**, a strategy platform where factions assemble fleets, reserve scarce resources, and deploy fleets on missions across the galaxy.
+You are building a backend service for managing fleets in a fictional galactic command system. This system models fleets, processes commands asynchronously, and ensures that shared resources are allocated safely under concurrent conditions.
 
-This take-home is intentionally large. You may use AI coding assistants freely (Copilot, ChatGPT, Cursor, etc.). We are evaluating your system design and engineering judgment as much as the final code.
+This exercise is designed to evaluate how you model systems, handle concurrency, design APIs, and make practical engineering tradeoffs.
 
-## Tech Constraints
+## Time Expectation
 
-Build a backend service using:
+This assignment is intended to take approximately 4-8 hours.
 
-- **Tech stack of choice**
-  - **Node.js + TypeScript** plumbing provided in repo - if choosing different tech stack just rebuild existing infrastructure or start from scratch
-- **In-memory persistence** (no external databases required)
-- **REST APIs**
-- **Automated tests**
+You are not expected to complete everything perfectly. Partial completion is acceptable as long as you document your decisions and tradeoffs.
 
-You may use any libraries you like, **except**:
+## Tech Stack
 
-- **Do not use** an off-the-shelf LRU implementation (you must implement it)
-- **Do not use** a real message queue (simulate in-memory)
-
-## What You're Building
-
-You will build a service with these major parts:
-
-- **Fleet domain + state machine**
-- **Resource reservation** with concurrency safety
-- **Command processing system** (queue + workers)
-- **LRU cache** used by your read path
-- **Event emission** for state changes (in-memory is fine)
-
-The service should feel like a foundation you'd be comfortable running in production with real infrastructure swapped in later.
+Node.js and TypeScript plumbing have been included for you. If you prefer a different stack feel free to rebuild the base plumbing in your desired stack.  
+Use in-memory storage only (no database required).  
+You may use any libraries you feel are appropriate.
 
 ## Domain Model
 
-### Fleet Lifecycle
+Each fleet has a lifecycle:
 
-A **Fleet** moves through states:
+Docked → Preparing → Ready → Deployed  
+Preparing → FailedPreparation
 
-```
-Docked → Preparing → Ready → Deployed → InBattle → (Victorious | Destroyed)
-                ↘ FailedPreparation
-```
+Rules:
 
-### Rules / Invariants
+- Only fleets in Docked state can begin preparation
+- A fleet must successfully reserve resources before becoming Ready
+- If resource reservation fails, the fleet transitions to FailedPreparation
+- Only Ready fleets can be deployed
 
-- Only **Docked** fleets can be edited (add/remove ships, change loadout).
-- A fleet cannot become **Ready** unless required resources are successfully reserved.
-- A fleet cannot become **Deployed** unless it is **Ready**.
-- Once a fleet is **Victorious** or **Destroyed**, it is immutable.
-- State transitions must be validated and produce clear errors when invalid.
+A fleet should include at minimum:
 
-### Resources
+- id
+- name
+- shipCount
+- fuelRequired
+- state
 
-The galaxy has limited shared resources:
+## Shared Resources
 
-- **FUEL**
-- **HYPERDRIVE_CORE**
-- **BATTLE_DROIDS**
+Assume a shared pool of resources (e.g., fuel).
 
-Example: only 100 **HYPERDRIVE_CORE** exist globally.
+Multiple fleets may attempt to reserve resources at the same time. Your system must ensure that resources are never over-allocated, even under concurrent requests.
 
-Multiple fleets may attempt to reserve resources concurrently. Your system must **prevent over-allocation**.
+## Commands
 
-## Required APIs (REST)
+Commands represent actions performed on fleets and are processed asynchronously.
 
-At minimum, implement:
+Required command:
 
-### Fleets
+PrepareFleetCommand
 
-- **POST /fleets** — create a fleet
-- **PATCH /fleets/:id** — modify a fleet (Docked only)
-- **GET /fleets/:id** — fetch a fleet (read model is fine)
-- **GET /fleets/:id/timeline** — show fleet history (events or transitions)
+- Transitions fleet from Docked → Preparing
+- Attempts to reserve resources
+- On success → Ready
+- On failure → FailedPreparation
 
-### Commands
+Each command should have a status:
 
-Command processing is central to this assignment. Implement:
+- Queued
+- Processing
+- Succeeded
+- Failed
 
-- **POST /commands** — enqueue a command
-- **GET /commands/:id** — get command status/result
+## Queue
 
-### Health/observability
+Implement a simple in-memory queue:
 
-- **GET /health**
+- Commands are submitted via API
+- A background worker processes commands asynchronously
+- One worker is sufficient
 
-## Command Processing System (Core Requirement)
+Out of scope:
 
-Your service must include an **in-memory Command Queue** and **Command Workers**.
+- Dead-letter queues
+- Retry backoff strategies
+- Scheduling or delayed execution
+- Durable persistence
 
-**Why commands?**  
-Fleet operations like reserving resources and deploying fleets represent "workflow steps" and are a good way to test distributed-system thinking without needing real infrastructure.
+## API
 
-### Required command types
+Fleets:
 
-Implement at least these commands:
+POST /fleets — create a fleet  
+GET /fleets/:id — retrieve a fleet  
+PATCH /fleets/:id — update fleet properties
 
-**PrepareFleetCommand**
+Commands:
 
-- transitions **Docked → Preparing**
-- reserves required resources
-- if successful → transitions to **Ready**
-- if fails → transitions to **FailedPreparation**
+POST /commands — submit a command  
+GET /commands/:id — retrieve command status
 
-**DeployFleetCommand**
+System:
 
-- transitions **Ready → Deployed**
+GET /health — health check
 
-(You may add more commands if you want, but these two are required.)
+## Concurrency Requirement
 
-### Command processing requirements
+Your system must correctly handle concurrent resource reservations.
 
-- Commands are created via **POST /commands**
-- Commands are processed **asynchronously** by one or more in-memory workers
-- Each command has a lifecycle/status: **Queued | Processing | Succeeded | Failed**
-- Each command attempt must be recorded with:
-  - attempt count
-  - timestamps
-  - error (if any)
+Example: two commands attempt to reserve resources at the same time. Your system must ensure that resources are not double-allocated.
 
-### Idempotency
+You may use any reasonable approach such as locks, mutexes, or other in-memory coordination strategies.
 
-Commands must be **idempotent**. If the same command is processed twice (e.g., due to retry), it must not double-apply side effects (double reserve, double transition, etc.).
+## Data Storage
 
-Include an **idempotency strategy** (your choice), and document it in README.
+Use in-memory data structures such as maps or arrays. No database is required.
 
-## Concurrency & Data Integrity (Must-Have)
+## Testing
 
-Resource reservation must be **concurrency safe**. We will look for a deliberate strategy such as:
+At minimum, include tests for:
 
-- optimistic locking (versions)
-- pessimistic locking (mutex per resource)
-- atomic compare-and-set simulation
-- transactional boundary abstraction
+- Valid and invalid fleet state transitions
+- Resource reservation under concurrent conditions
+- One end-to-end flow (API → command → state change)
 
-**Important:** We will run a test where two commands attempt to reserve overlapping resources concurrently, and we expect **no over-allocation**.
+## What We Care About
 
-## LRU Cache (Algorithmic Requirement)
+- Code clarity and structure
+- Correctness of business logic
+- Concurrency handling
+- API design
+- Thoughtful tradeoffs
 
-Implement an **O(1) LRU cache from scratch** (no libraries).
+## What We Do Not Expect
 
-Use it to cache at least one read path, e.g.:
+- Production-grade queue systems
+- Advanced retry frameworks
+- Full event sourcing implementations
+- Complex infrastructure
 
-- **GET /fleets/:id** read model
-- resource availability reads
+## Bonus (Optional)
 
-Include unit tests proving:
+- Additional commands (e.g., DeployFleetCommand)
+- Timeline/history of fleet transitions
+- Logging or metrics
+- Improved error handling
 
-- eviction order
-- O(1) behavior assumption (structural)
-- updates move entries to most-recently-used
+## Submission
 
-## Events / Timeline
+Please include your source code and a short README describing:
 
-Every fleet state transition must **emit an event** (in-memory is fine). **GET /fleets/:id/timeline** should return the ordered timeline of these events.
-
-Examples:
-
-- FleetCreated
-- FleetPrepared
-- ResourcesReserved
-- FleetDeployRequested
-- FleetDeployed
-- FleetPreparationFailed
-
-We care less about the exact naming than correctness and clarity.
-
-## Tests
-
-Include automated tests for:
-
-- fleet state machine (valid + invalid transitions)
-- resource reservation concurrency behavior
-- command retries
-- LRU cache
-
-At least one **integration-style test** is expected.
-
-## Deliverables
-
-Provide:
-
-- **Source code** (Git repo)
-- **README.md** explaining:
-  - architecture (high-level)
-  - domain model decisions
-  - concurrency strategy
-  - idempotency strategy
-  - what would change in production (Azure Service Bus, Cosmos/SQL, etc.)
-
-- **Instructions to run locally**
-
-## Time Expectations
-
-This assignment is intentionally large as we are looking for candidates to build this project using AI coding assistants. Scope thoughtfully. Prioritize **correctness**, **clarity**, and **architectural integrity**.
-
-## Evaluation Criteria (What We'll Look For)
-
-- Clean architecture and separation of concerns
-- Domain modeling and state machine correctness
-- Concurrency safety and data integrity
-- Idempotent command processing with retries
-- Test quality and coverage of tricky behaviors
-- Production-minded observability and error handling
-- Extend README describing tradeoffs and next steps
+- Design decisions
+- Tradeoffs
+- What you would improve with more time
 
