@@ -1,2 +1,16 @@
-node_modules
-dist
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.DotSettings.user
+
+## Build output
+dist/
+publish/
+
+## IDE
+.idea/
+*.swp
+*~
